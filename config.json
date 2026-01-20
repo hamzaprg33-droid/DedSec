@@ -1,1 +1,6 @@
-
+{
+  "prefix": "!",
+  "botName": "DedSec",
+  "activity": "Watching London",
+  "version": "1.0.0"
+}
