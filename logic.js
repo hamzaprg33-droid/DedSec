@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits, EmbedBuilder, Collection, AuditLogEvent } = require('discord.js');
 const mongoose = require('mongoose');
 
-// Datenbank-Struktur
+// MongoDB Modell
 const LogSchema = new mongoose.Schema({
     guildId: String,
     date: { type: Date, default: Date.now },
@@ -15,13 +15,13 @@ const AuditLog = mongoose.model('AuditLog', LogSchema);
 const spamMap = new Collection();
 
 async function initializeBot(config, token, mongoUri) {
-    // 1. Online-Datenbank Verbindung
+    // 1. MongoDB Verbindung
     try {
         if (!mongoUri) throw new Error("MONGO_URI is missing in .env");
         await mongoose.connect(mongoUri);
-        console.log("[DATABASE] MongoDB Online.");
+        console.log("[DATABASE] MongoDB Connection Success.");
     } catch (err) {
-        console.error("[DATABASE] Error: " + err.message);
+        console.error("[DATABASE] Connection Error: " + err.message);
     }
 
     const client = new Client({ 
@@ -37,11 +37,11 @@ async function initializeBot(config, token, mongoUri) {
     const isTeam = (member) => member.roles.cache.some(r => r.name.toLowerCase().includes('team'));
 
     client.once('ready', () => {
-        console.log(`[DEDSEC] ${config.botName} online.`);
+        console.log(`[DEDSEC] Bot ${config.botName} online.`);
         client.user.setActivity(config.activity);
     });
 
-    // ROLLEN SETUP
+    // AUTO ROLES & TEAM SETUP
     client.on('guildCreate', async (guild) => {
         let teamRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('team'));
         if (!teamRole) await guild.roles.create({ name: 'Team' });
@@ -68,16 +68,16 @@ async function initializeBot(config, token, mongoUri) {
         }
 
         if (message.content === config.prefix + 'ping') {
-            const sent = await message.reply('Calcul...");
+            const sent = await message.reply('Calculating...');
             const embed = new EmbedBuilder()
                 .setColor('#00BFFF')
                 .setTitle('Ping Informations')
-                .setDescription(`Delay: ${sent.createdTimestamp - message.createdTimestamp}ms\nAPI: ${Math.round(client.ws.ping)}ms`);
+                .setDescription(`Latency: ${sent.createdTimestamp - message.createdTimestamp}ms\nAPI: ${Math.round(client.ws.ping)}ms`);
             await sent.edit({ content: 'Pong!', embeds: [embed] });
         }
     });
 
-    // ANTI-NUKE
+    // ANTI-NUKE logic
     const nukeCheck = async (guild, type) => {
         const audit = await guild.fetchAuditLogs({ limit: 1, type: type });
         const entry = audit.entries.first();
@@ -86,7 +86,7 @@ async function initializeBot(config, token, mongoUri) {
         if (executor.user.bot) {
             const trusted = guild.roles.cache.find(r => r.name === 'Trusted');
             if (!executor.roles.cache.has(trusted?.id)) {
-                await executor.kick("Anti-Nuke");
+                await executor.kick("Anti-Nuke Detection");
             }
         }
     };
@@ -94,7 +94,7 @@ async function initializeBot(config, token, mongoUri) {
     client.on('channelDelete', (ch) => nukeCheck(ch.guild, AuditLogEvent.ChannelDelete));
     client.on('roleDelete', (r) => nukeCheck(r.guild, AuditLogEvent.RoleDelete));
 
-    // MONGODB LOGGING
+    // MONGODB AUDIT LOGGING
     client.on('guildAuditLogEntryCreate', async (entry, guild) => {
         try {
             const user = await client.users.fetch(entry.executorId);
