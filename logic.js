@@ -57,7 +57,6 @@ async function initializeBot(config, token, mongoUri) {
     client.on('messageCreate', async (message) => {
         if (message.author.bot || !message.guild) return;
 
-        // Anti-Spam
         if (!isTeam(message.member)) {
             const now = Date.now();
             if (!spamMap.has(message.author.id)) spamMap.set(message.author.id, []);
@@ -65,13 +64,9 @@ async function initializeBot(config, token, mongoUri) {
             times.push(now);
             const recent = times.filter(t => t > now - 5000);
             spamMap.set(message.author.id, recent);
-
-            if (recent.length > 3) {
-                return message.delete().catch(() => {});
-            }
+            if (recent.length > 3) return message.delete().catch(() => {});
         }
 
-        // Ping Command
         if (message.content === config.prefix + 'ping') {
             const sent = await message.reply('Calculating...');
             const embed = new EmbedBuilder()
@@ -81,18 +76,14 @@ async function initializeBot(config, token, mongoUri) {
             await sent.edit({ content: 'Pong!', embeds: [embed] });
         }
 
-        // SERVER LOGS COMMAND
         if (message.content.startsWith(config.prefix + 'serverlogs')) {
             if (!isTeam(message.member)) return message.reply("Access Denied.");
-            
-            const args = message.content.split(' ');
+            const args = message.content.split(' ')[1];
             let query = { guildId: message.guild.id };
-            
-            if (args[1]) query.username = new RegExp(args[1], 'i');
+            if (args) query.username = new RegExp(args, 'i');
 
             const results = await AuditLog.find(query).sort({ date: -1 }).limit(10);
             const logString = results.map(l => `[${l.date.toLocaleDateString()}] ${l.username}: ${l.action}`).join('\n');
-            
             message.channel.send(`**DedSec Audit Backup:**\n\`\`\`${logString || 'No logs found.'}\`\`\``);
         }
     });
@@ -102,12 +93,11 @@ async function initializeBot(config, token, mongoUri) {
         const audit = await guild.fetchAuditLogs({ limit: 1, type: actionType });
         const entry = audit.entries.first();
         if (!entry) return;
-
         const executor = await guild.members.fetch(entry.executorId);
         if (executor.user.bot) {
             const trusted = guild.roles.cache.find(r => r.name === 'Trusted');
             if (!executor.roles.cache.has(trusted?.id)) {
-                await executor.kick("Anti-Nuke Detection: Unauthorized Bot Action");
+                await executor.kick("Anti-Nuke Detection");
             }
         }
     };
