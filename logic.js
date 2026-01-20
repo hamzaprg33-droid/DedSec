@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits, EmbedBuilder, Collection, AuditLogEvent } = require('discord.js');
 const mongoose = require('mongoose');
 
-// Datenbank-Modell
+// Datenbank-Struktur
 const LogSchema = new mongoose.Schema({
     guildId: String,
     date: { type: Date, default: Date.now },
@@ -15,11 +15,11 @@ const AuditLog = mongoose.model('AuditLog', LogSchema);
 const spamMap = new Collection();
 
 async function initializeBot(config, token, mongoUri) {
-    // 1. Datenbank Verbindung
+    // 1. Online-Datenbank Verbindung
     try {
-        if (!mongoUri) throw new Error("MONGO_URI is undefined in .env");
+        if (!mongoUri) throw new Error("MONGO_URI is missing in .env");
         await mongoose.connect(mongoUri);
-        console.log("[DATABASE] Successfully connected to MongoDB Atlas.");
+        console.log("[DATABASE] MongoDB Online.");
     } catch (err) {
         console.error("[DATABASE] Error: " + err.message);
     }
@@ -37,17 +37,17 @@ async function initializeBot(config, token, mongoUri) {
     const isTeam = (member) => member.roles.cache.some(r => r.name.toLowerCase().includes('team'));
 
     client.once('ready', () => {
-        console.log(`[SYSTEM] ${config.botName} is now online.`);
+        console.log(`[DEDSEC] ${config.botName} online.`);
         client.user.setActivity(config.activity);
     });
 
-    // TEAM & TRUSTED ROLE SETUP
+    // ROLLEN SETUP
     client.on('guildCreate', async (guild) => {
         let teamRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('team'));
-        if (!teamRole) await guild.roles.create({ name: 'Team', reason: 'DedSec Auto-Setup' });
+        if (!teamRole) await guild.roles.create({ name: 'Team' });
 
         let trustedRole = guild.roles.cache.find(r => r.name === 'Trusted');
-        if (!trustedRole) trustedRole = await guild.roles.create({ name: 'Trusted', reason: 'Anti-Nuke' });
+        if (!trustedRole) trustedRole = await guild.roles.create({ name: 'Trusted' });
         
         const me = await guild.members.fetchMe();
         await me.roles.add(trustedRole).catch(() => {});
@@ -68,36 +68,25 @@ async function initializeBot(config, token, mongoUri) {
         }
 
         if (message.content === config.prefix + 'ping') {
-            const sent = await message.reply('Calculating...');
+            const sent = await message.reply('Calcul...");
             const embed = new EmbedBuilder()
                 .setColor('#00BFFF')
                 .setTitle('Ping Informations')
-                .setDescription(`Latency: ${sent.createdTimestamp - message.createdTimestamp}ms\nAPI: ${Math.round(client.ws.ping)}ms`);
+                .setDescription(`Delay: ${sent.createdTimestamp - message.createdTimestamp}ms\nAPI: ${Math.round(client.ws.ping)}ms`);
             await sent.edit({ content: 'Pong!', embeds: [embed] });
-        }
-
-        if (message.content.startsWith(config.prefix + 'serverlogs')) {
-            if (!isTeam(message.member)) return message.reply("Access Denied.");
-            const args = message.content.split(' ')[1];
-            let query = { guildId: message.guild.id };
-            if (args) query.username = new RegExp(args, 'i');
-
-            const results = await AuditLog.find(query).sort({ date: -1 }).limit(10);
-            const logString = results.map(l => `[${l.date.toLocaleDateString()}] ${l.username}: ${l.action}`).join('\n');
-            message.channel.send(`**DedSec Audit Backup:**\n\`\`\`${logString || 'No logs found.'}\`\`\``);
         }
     });
 
     // ANTI-NUKE
-    const nukeCheck = async (guild, actionType) => {
-        const audit = await guild.fetchAuditLogs({ limit: 1, type: actionType });
+    const nukeCheck = async (guild, type) => {
+        const audit = await guild.fetchAuditLogs({ limit: 1, type: type });
         const entry = audit.entries.first();
         if (!entry) return;
         const executor = await guild.members.fetch(entry.executorId);
         if (executor.user.bot) {
             const trusted = guild.roles.cache.find(r => r.name === 'Trusted');
             if (!executor.roles.cache.has(trusted?.id)) {
-                await executor.kick("Anti-Nuke Detection");
+                await executor.kick("Anti-Nuke");
             }
         }
     };
@@ -105,18 +94,18 @@ async function initializeBot(config, token, mongoUri) {
     client.on('channelDelete', (ch) => nukeCheck(ch.guild, AuditLogEvent.ChannelDelete));
     client.on('roleDelete', (r) => nukeCheck(r.guild, AuditLogEvent.RoleDelete));
 
-    // LOGGING TO MONGODB
+    // MONGODB LOGGING
     client.on('guildAuditLogEntryCreate', async (entry, guild) => {
         try {
-            const executor = await client.users.fetch(entry.executorId);
+            const user = await client.users.fetch(entry.executorId);
             await AuditLog.create({
                 guildId: guild.id,
                 userId: entry.executorId,
-                username: executor.tag,
-                action: AuditLogEvent[entry.action] || "Action " + entry.action,
-                reason: entry.reason || "No reason"
+                username: user.tag,
+                action: "Action " + entry.action,
+                reason: entry.reason || "None"
             });
-        } catch (e) { console.error("Logging failed: " + e.message); }
+        } catch (e) { }
     });
 
     client.login(token);
