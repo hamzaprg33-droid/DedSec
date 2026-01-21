@@ -1,114 +1,170 @@
-const { Client, GatewayIntentBits, EmbedBuilder, Collection, AuditLogEvent } = require('discord.js');
-const mongoose = require('mongoose');
+const { Client, GatewayIntentBits, EmbedBuilder, Collection, AuditLogEvent, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField } = require("discord.js")
+const mongoose = require("mongoose")
 
-// MongoDB Modell
-const LogSchema = new mongoose.Schema({
+const GuildSettingsSchema = new mongoose.Schema({
     guildId: String,
-    date: { type: Date, default: Date.now },
+    autoUpdate: Boolean,
+    dashboardRoles: [String]
+})
+
+const SpamSchema = new mongoose.Schema({
+    guildId: String,
     userId: String,
-    username: String,
-    action: String,
-    reason: String
-});
-const AuditLog = mongoose.model('AuditLog', LogSchema);
+    count: Number,
+    lastSpam: Date
+})
 
-const spamMap = new Collection();
+const GuildSettings = mongoose.model("GuildSettings", GuildSettingsSchema)
+const SpamLog = mongoose.model("SpamLog", SpamSchema)
 
-async function initializeBot(config, token, mongoUri) {
-    // 1. MongoDB Verbindung
-    try {
-        if (!mongoUri) throw new Error("MONGO_URI is missing in .env");
-        await mongoose.connect(mongoUri);
-        console.log("[DATABASE] MongoDB Connection Success.");
-    } catch (err) {
-        console.error("[DATABASE] Connection Error: " + err.message);
-    }
+async function initializeBot(config, token, mongoUrl) {
+    if (!mongoUrl) throw new Error("MONGO_URL is missing in .env")
+    await mongoose.connect(mongoUrl)
 
-    const client = new Client({ 
+    const client = new Client({
         intents: [
-            GatewayIntentBits.Guilds, 
-            GatewayIntentBits.GuildMessages, 
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
+            GatewayIntentBits.GuildMembers,
             GatewayIntentBits.GuildModeration,
-            GatewayIntentBits.GuildMembers
-        ] 
-    });
+            GatewayIntentBits.DirectMessages
+        ]
+    })
 
-    const isTeam = (member) => member.roles.cache.some(r => r.name.toLowerCase().includes('team'));
+    const spamCache = new Collection()
 
-    client.once('ready', () => {
-        console.log(`[DEDSEC] Bot ${config.botName} online.`);
-        client.user.setActivity(config.activity);
-    });
+    client.once("ready", async () => {
+        client.user.setActivity(config.activity)
 
-    // AUTO ROLES & TEAM SETUP
-    client.on('guildCreate', async (guild) => {
-        let teamRole = guild.roles.cache.find(r => r.name.toLowerCase().includes('team'));
-        if (!teamRole) await guild.roles.create({ name: 'Team' });
-
-        let trustedRole = guild.roles.cache.find(r => r.name === 'Trusted');
-        if (!trustedRole) trustedRole = await guild.roles.create({ name: 'Trusted' });
-        
-        const me = await guild.members.fetchMe();
-        await me.roles.add(trustedRole).catch(() => {});
-    });
-
-    // PING & ANTI-SPAM
-    client.on('messageCreate', async (message) => {
-        if (message.author.bot || !message.guild) return;
-
-        if (!isTeam(message.member)) {
-            const now = Date.now();
-            if (!spamMap.has(message.author.id)) spamMap.set(message.author.id, []);
-            const times = spamMap.get(message.author.id);
-            times.push(now);
-            const recent = times.filter(t => t > now - 5000);
-            spamMap.set(message.author.id, recent);
-            if (recent.length > 3) return message.delete().catch(() => {});
+        for (const guild of client.guilds.cache.values()) {
+            const settings = await GuildSettings.findOne({ guildId: guild.id })
+            if (!settings || !settings.autoUpdate) continue
+            await guild.commands.set([])
         }
 
-        if (message.content === config.prefix + 'ping') {
-            const sent = await message.reply('Calculating...');
-            const embed = new EmbedBuilder()
-                .setColor('#00BFFF')
-                .setTitle('Ping Informations')
-                .setDescription(`Latency: ${sent.createdTimestamp - message.createdTimestamp}ms\nAPI: ${Math.round(client.ws.ping)}ms`);
-            await sent.edit({ content: 'Pong!', embeds: [embed] });
-        }
-    });
+        for (const guild of client.guilds.cache.values()) {
+            if (!config.verification?.channel) continue
+            const channel = guild.channels.cache.get(config.verification.channel)
+            if (!channel) continue
 
-    // ANTI-NUKE logic
-    const nukeCheck = async (guild, type) => {
-        const audit = await guild.fetchAuditLogs({ limit: 1, type: type });
-        const entry = audit.entries.first();
-        if (!entry) return;
-        const executor = await guild.members.fetch(entry.executorId);
-        if (executor.user.bot) {
-            const trusted = guild.roles.cache.find(r => r.name === 'Trusted');
-            if (!executor.roles.cache.has(trusted?.id)) {
-                await executor.kick("Anti-Nuke Detection");
+            const messages = await channel.messages.fetch({ limit: 10 })
+            let msg = messages.find(m => m.author.id === client.user.id)
+
+            if (!msg) {
+                msg = await channel.send("DedSec verification initialized. Check your DMs.")
+            }
+
+            const owner = await guild.fetchOwner()
+            startVerification(owner.user)
+        }
+    })
+
+    async function startVerification(user) {
+        const dm = await user.createDM()
+
+        const q1 = await dm.send("What is your Server ID?")
+        const a1 = (await dm.awaitMessages({ max: 1, time: 300000 })).first().content
+
+        const q2row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId("auto_yes").setLabel("Yes").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId("auto_no").setLabel("No").setStyle(ButtonStyle.Danger)
+        )
+        const q2 = await dm.send({ content: "Should the bot auto update commands?", components: [q2row] })
+        const i2 = await q2.awaitMessageComponent({ time: 300000 })
+        const autoUpdate = i2.customId === "auto_yes"
+        await i2.update({ components: [] })
+
+        const q3 = await dm.send("Which Role IDs should access the dashboard? Separate with commas.")
+        const roles = (await dm.awaitMessages({ max: 1, time: 300000 })).first().content.split(",").map(r => r.trim())
+
+        const q4row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId("bot_yes").setLabel("Yes").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId("bot_no").setLabel("No").setStyle(ButtonStyle.Danger)
+        )
+        const q4 = await dm.send({ content: "Is the bot on your server?", components: [q4row] })
+        const i4 = await q4.awaitMessageComponent({ time: 300000 })
+        const isOnServer = i4.customId === "bot_yes"
+        await i4.update({ components: [] })
+
+        if (!isOnServer) return
+
+        await GuildSettings.findOneAndUpdate(
+            { guildId: a1 },
+            { guildId: a1, autoUpdate, dashboardRoles: roles },
+            { upsert: true }
+        )
+
+        const guild = client.guilds.cache.get(a1)
+        if (!guild) return
+
+        await guild.commands.set([])
+
+        for (const roleId of roles) {
+            const role = guild.roles.cache.get(roleId)
+            if (!role) continue
+
+            for (const member of role.members.values()) {
+                const embed = new EmbedBuilder()
+                    .setTitle(`${guild.name} Dashboard`)
+                    .setDescription(`Herzlich willkommen bei DedSec!\nUm dich beim Serverdashboard von **${guild.name}** einzuloggen, klicke den Knopf unter mir.`)
+                    .setColor(0x5c1a1b)
+
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId("dashboard_login").setLabel("Als USERNAME einloggen").setStyle(ButtonStyle.Primary)
+                )
+
+                await member.send({ content: `<@${member.id}>`, embeds: [embed], components: [row] })
             }
         }
-    };
+    }
 
-    client.on('channelDelete', (ch) => nukeCheck(ch.guild, AuditLogEvent.ChannelDelete));
-    client.on('roleDelete', (r) => nukeCheck(r.guild, AuditLogEvent.RoleDelete));
+    client.on("interactionCreate", async interaction => {
+        if (!interaction.isButton()) return
 
-    // MONGODB AUDIT LOGGING
-    client.on('guildAuditLogEntryCreate', async (entry, guild) => {
-        try {
-            const user = await client.users.fetch(entry.executorId);
-            await AuditLog.create({
-                guildId: guild.id,
-                userId: entry.executorId,
-                username: user.tag,
-                action: "Action " + entry.action,
-                reason: entry.reason || "None"
-            });
-        } catch (e) { }
-    });
+        if (interaction.customId === "dashboard_login") {
+            await interaction.message.delete()
 
-    client.login(token);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId("feature_1").setLabel("Anti Spam").setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId("feature_2").setLabel("Anti Nuke").setStyle(ButtonStyle.Danger)
+            )
+
+            await interaction.user.send({ content: "Dashboard", components: [row] })
+        }
+
+        if (interaction.customId.startsWith("feature_")) {
+            const newStyle = interaction.component.style === ButtonStyle.Danger ? ButtonStyle.Success : ButtonStyle.Danger
+            const row = ActionRowBuilder.from(interaction.message.components[0])
+            row.components.find(b => b.customId === interaction.customId).setStyle(newStyle)
+            await interaction.update({ components: [row] })
+        }
+    })
+
+    client.on("messageCreate", async message => {
+        if (!message.guild || message.author.bot) return
+
+        const key = `${message.guild.id}_${message.author.id}`
+        const now = Date.now()
+
+        let data = spamCache.get(key)
+        if (!data) data = { count: 0, last: now }
+
+        if (now - data.last > 86400000) data.count = 0
+
+        data.count++
+        data.last = now
+        spamCache.set(key, data)
+
+        if (data.count >= 4) {
+            const minutes = data.count
+            await message.delete().catch(() => {})
+            await message.member.timeout(minutes * 60000, "Spamming")
+            await message.channel.send(`${message.author} has been timed out for ${minutes} minute(s) due to spamming.`)
+        }
+    })
+
+    client.login(token)
 }
 
-module.exports = { initializeBot };
+module.exports = { initializeBot }
