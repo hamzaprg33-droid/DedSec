@@ -1,89 +1,75 @@
-const { Client, GatewayIntentBits, Collection, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js")
-const fs = require("fs")
-const path = require("path")
+const {
+  Client,
+  GatewayIntentBits,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder
+} = require("discord.js")
 
-const dataDir = path.join(__dirname, "data")
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir)
-
-const spamFile = path.join(dataDir, "spam.json")
-const dashboardFile = path.join(dataDir, "dashboard.json")
-
-if (!fs.existsSync(spamFile)) fs.writeFileSync(spamFile, "{}")
-if (!fs.existsSync(dashboardFile)) fs.writeFileSync(dashboardFile, "{}")
-
-function load(file) {
-    return JSON.parse(fs.readFileSync(file))
-}
-
-function save(file, data) {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2))
-}
+const config = require("./config.json")
 
 function initializeBot(token) {
-    if (!token) throw new Error("DISCORD_BOT_TOKEN missing")
+  if (!token) throw new Error("DISCORD_BOT_TOKEN missing")
 
-    const client = new Client({
-        intents: [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildMessages,
-            GatewayIntentBits.MessageContent,
-            GatewayIntentBits.GuildMembers,
-            GatewayIntentBits.DirectMessages
-        ]
-    })
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.MessageContent
+    ]
+  })
 
-    client.once("ready", () => {
-        console.log(`[DEDSEC] ${client.user.tag} online`)
-    })
+  function updateActivity() {
+    const count = client.guilds.cache.size
+    client.user.setActivity(`Secure ${count} Servers`)
+  }
 
-    client.on("messageCreate", async msg => {
-        if (!msg.guild || msg.author.bot) return
+  client.once("ready", async () => {
+    console.log("ctOS: Logic synced and active.")
+    updateActivity()
 
-        const spam = load(spamFile)
-        const key = msg.guild.id + ":" + msg.author.id
-        const now = Date.now()
+    for (const guild of client.guilds.cache.values()) {
+      const channel = guild.channels.cache.get(config.verification.channel)
+      if (!channel) continue
 
-        if (!spam[key]) spam[key] = { count: 0, last: now }
-        if (now - spam[key].last > 86400000) spam[key].count = 0
+      const messages = await channel.messages.fetch({ limit: 10 })
+      const existing = messages.find(m => m.author.id === client.user.id)
+      if (existing) continue
 
-        spam[key].count++
-        spam[key].last = now
-        save(spamFile, spam)
+      const embed = new EmbedBuilder()
+        .setTitle("ctOS Verification")
+        .setDescription("Click the button below to verify yourself.")
+        .setColor(0x2f3136)
 
-        if (spam[key].count >= 4) {
-            const minutes = spam[key].count
-            await msg.delete().catch(() => {})
-            await msg.member.timeout(minutes * 60000, "Spamming")
-            await msg.channel.send(`${msg.author} was timed out for ${minutes} minute(s) due to spamming.`)
-        }
-    })
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("verify_user")
+          .setLabel("Verify")
+          .setStyle(ButtonStyle.Success)
+      )
 
-    client.on("interactionCreate", async i => {
-        if (!i.isButton()) return
+      await channel.send({ embeds: [embed], components: [row] })
+    }
+  })
 
-        const dashboards = load(dashboardFile)
-        const id = i.user.id
+  client.on("guildCreate", updateActivity)
+  client.on("guildDelete", updateActivity)
 
-        if (!dashboards[id]) dashboards[id] = {}
+  client.on("interactionCreate", async interaction => {
+    if (!interaction.isButton()) return
+    if (interaction.customId !== "verify_user") return
 
-        dashboards[id][i.customId] = !dashboards[id][i.customId]
-        save(dashboardFile, dashboards)
+    const role = interaction.guild.roles.cache.find(r => r.name === "Verified")
+    if (role && !interaction.member.roles.cache.has(role.id)) {
+      await interaction.member.roles.add(role)
+    }
 
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId("antispam")
-                .setLabel("AntiSpam")
-                .setStyle(dashboards[id]["antispam"] ? ButtonStyle.Success : ButtonStyle.Danger),
-            new ButtonBuilder()
-                .setCustomId("auditlog")
-                .setLabel("AuditLog")
-                .setStyle(dashboards[id]["auditlog"] ? ButtonStyle.Success : ButtonStyle.Danger)
-        )
+    await interaction.reply({ content: "ctOS: Verification complete.", ephemeral: true })
+  })
 
-        await i.update({ components: [row] })
-    })
-
-    client.login(token)
+  client.login(token)
 }
 
 module.exports = { initializeBot }
