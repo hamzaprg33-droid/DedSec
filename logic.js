@@ -1,20 +1,9 @@
-const { Client, GatewayIntentBits, EmbedBuilder, Collection, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js")
+const { Client, GatewayIntentBits, Partials, Collection } = require("discord.js")
 const mongoose = require("mongoose")
 
-const GuildSettings = mongoose.model("GuildSettings", new mongoose.Schema({
-    guildId: String,
-    autoUpdate: Boolean,
-    dashboardRoles: [String]
-}))
-
-const SpamLog = mongoose.model("SpamLog", new mongoose.Schema({
-    guildId: String,
-    userId: String,
-    count: Number,
-    lastSpam: Date
-}))
-
 async function initializeBot(config, token, mongoUrl) {
+    if (!token) throw new Error("DISCORD_BOT_TOKEN missing")
+
     if (mongoUrl) await mongoose.connect(mongoUrl)
 
     const client = new Client({
@@ -23,30 +12,17 @@ async function initializeBot(config, token, mongoUrl) {
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
             GatewayIntentBits.GuildMembers,
+            GatewayIntentBits.GuildModeration,
             GatewayIntentBits.DirectMessages
-        ]
+        ],
+        partials: [Partials.Channel]
     })
 
     const spamCache = new Collection()
 
-    client.once("ready", async () => {
+    client.once("ready", () => {
+        console.log(`[DEDSEC] ONLINE AS ${client.user.tag}`)
         client.user.setActivity(config.activity)
-
-        for (const guild of client.guilds.cache.values()) {
-            const settings = await GuildSettings.findOne({ guildId: guild.id })
-            if (settings?.autoUpdate) await guild.commands.set([])
-        }
-
-        if (config.verification?.channel) {
-            for (const guild of client.guilds.cache.values()) {
-                const ch = guild.channels.cache.get(config.verification.channel)
-                if (!ch) continue
-                const msgs = await ch.messages.fetch({ limit: 5 })
-                if (!msgs.find(m => m.author.id === client.user.id)) {
-                    await ch.send("DedSec is online. Check your DMs.")
-                }
-            }
-        }
     })
 
     client.on("messageCreate", async msg => {
@@ -66,7 +42,9 @@ async function initializeBot(config, token, mongoUrl) {
             const minutes = data.count
             await msg.delete().catch(() => {})
             await msg.member.timeout(minutes * 60000, "Spamming")
-            await msg.channel.send(`${msg.author} was timed out for ${minutes} minute(s) due to spamming.`)
+            await msg.channel.send(
+                `${msg.author} was timed out for ${minutes} minute(s) due to spamming.`
+            )
         }
     })
 
