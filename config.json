@@ -1,6 +1,8 @@
 {
   "prefix": "!",
-  "botName": "DedSec",
-  "activity": "Secure everthing",
-  "version": "1.0.0"
+  "botName": "ctOS",
+  "version": "1.0.0",
+  "verification": {
+    "channel": "1463549444233363601"
+  }
 }
