@@ -1,4 +1,4 @@
-const { 
+const {
   Client,
   GatewayIntentBits,
   Partials,
@@ -21,9 +21,10 @@ function initializeBot(config, token) {
     partials: [Partials.Channel]
   })
 
-  const registerSessions = new Collection()
+  const sessions = new Collection()
 
   function updateActivity() {
+    if (!client.user) return
     client.user.setActivity(`Secure ${client.guilds.cache.size} Servers`)
   }
 
@@ -36,23 +37,22 @@ function initializeBot(config, token) {
       if (!channel) continue
 
       const messages = await channel.messages.fetch({ limit: 10 })
-      const existing = messages.find(m => m.author.id === client.user.id)
+      const exists = messages.find(m => m.author.id === client.user.id)
+      if (exists) continue
 
-      if (!existing) {
-        const embed = new EmbedBuilder()
-          .setTitle("ctOS Server Registration")
-          .setDescription("Register your server to activate ctOS features.")
-          .setColor(0x2b0000)
+      const embed = new EmbedBuilder()
+        .setTitle("ctOS Server Registration")
+        .setDescription("Register your server to activate ctOS.")
+        .setColor(0x2b0000)
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("ctos_register_start")
-            .setLabel("Register Server")
-            .setStyle(ButtonStyle.Primary)
-        )
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("ctos_register")
+          .setLabel("Register Server")
+          .setStyle(ButtonStyle.Primary)
+      )
 
-        await channel.send({ embeds: [embed], components: [row] })
-      }
+      await channel.send({ embeds: [embed], components: [row] })
     }
   })
 
@@ -61,44 +61,59 @@ function initializeBot(config, token) {
 
   client.on("interactionCreate", async interaction => {
     if (!interaction.isButton()) return
-    if (interaction.customId !== "ctos_register_start") return
+    if (interaction.customId !== "ctos_register") return
 
-    registerSessions.set(interaction.user.id, { step: 1, data: {} })
+    try {
+      await interaction.user.send("1. What is your Server ID?")
+    } catch {
+      await interaction.reply({
+        content: "❌ I cannot send you a DM. Please enable Direct Messages and try again.",
+        ephemeral: true
+      })
+      return
+    }
 
-    await interaction.reply({ content: "Check your DMs to continue server registration.", ephemeral: true })
-    await interaction.user.send("1. What is your Server ID?")
+    sessions.set(interaction.user.id, { step: 1, data: {} })
+
+    await interaction.reply({
+      content: "📩 Check your DMs to continue server registration.",
+      ephemeral: true
+    })
   })
 
   client.on("messageCreate", async message => {
     if (message.guild) return
-    if (!registerSessions.has(message.author.id)) return
+    const session = sessions.get(message.author.id)
+    if (!session) return
 
-    const session = registerSessions.get(message.author.id)
+    try {
+      if (session.step === 1) {
+        session.data.serverId = message.content
+        session.step = 2
+        await message.author.send("2. Enable automatic updates? (Yes / No)")
+        return
+      }
 
-    if (session.step === 1) {
-      session.data.serverId = message.content
-      session.step = 2
-      await message.author.send("2. Enable automatic updates for new features? (Yes / No)")
-      return
-    }
+      if (session.step === 2) {
+        session.data.autoUpdate = message.content.toLowerCase() === "yes"
+        session.step = 3
+        await message.author.send("3. Dashboard role IDs (comma separated)")
+        return
+      }
 
-    if (session.step === 2) {
-      session.data.autoUpdate = message.content.toLowerCase() === "yes"
-      session.step = 3
-      await message.author.send("3. Enter dashboard role IDs separated by commas")
-      return
-    }
+      if (session.step === 3) {
+        session.data.roles = message.content.split(",").map(r => r.trim())
+        session.step = 4
+        await message.author.send("4. Is ctOS already on your server? (Yes / No)")
+        return
+      }
 
-    if (session.step === 3) {
-      session.data.roles = message.content.split(",").map(r => r.trim())
-      session.step = 4
-      await message.author.send("4. Is ctOS already on your server? (Yes / No)")
-      return
-    }
-
-    if (session.step === 4) {
-      registerSessions.delete(message.author.id)
-      await message.author.send("ctOS registration completed.")
+      if (session.step === 4) {
+        sessions.delete(message.author.id)
+        await message.author.send("✅ ctOS server registration completed.")
+      }
+    } catch {
+      sessions.delete(message.author.id)
     }
   })
 
