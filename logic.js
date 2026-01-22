@@ -24,7 +24,6 @@ function initializeBot(config, token) {
   const sessions = new Collection()
 
   function updateActivity() {
-    if (!client.user) return
     client.user.setActivity(`Secure ${client.guilds.cache.size} Servers`)
   }
 
@@ -36,9 +35,8 @@ function initializeBot(config, token) {
       const channel = guild.channels.cache.get(config.verification.channel)
       if (!channel) continue
 
-      const messages = await channel.messages.fetch({ limit: 10 })
-      const exists = messages.find(m => m.author.id === client.user.id)
-      if (exists) continue
+      const messages = await channel.messages.fetch({ limit: 20 })
+      const old = messages.find(m => m.author.id === client.user.id)
 
       const embed = new EmbedBuilder()
         .setTitle("ctOS Server Registration")
@@ -52,7 +50,11 @@ function initializeBot(config, token) {
           .setStyle(ButtonStyle.Primary)
       )
 
-      await channel.send({ embeds: [embed], components: [row] })
+      if (old) {
+        await old.edit({ embeds: [embed], components: [row] })
+      } else {
+        await channel.send({ embeds: [embed], components: [row] })
+      }
     }
   })
 
@@ -61,13 +63,13 @@ function initializeBot(config, token) {
 
   client.on("interactionCreate", async interaction => {
     if (!interaction.isButton()) return
-    if (interaction.customId !== "ctos_register") return
+    if (!["ctos_register", "verify", "verify_server"].includes(interaction.customId)) return
 
     try {
       await interaction.user.send("1. What is your Server ID?")
     } catch {
       await interaction.reply({
-        content: "❌ I cannot send you a DM. Please enable Direct Messages and try again.",
+        content: "Enable Direct Messages and click the button again.",
         ephemeral: true
       })
       return
@@ -76,7 +78,7 @@ function initializeBot(config, token) {
     sessions.set(interaction.user.id, { step: 1, data: {} })
 
     await interaction.reply({
-      content: "📩 Check your DMs to continue server registration.",
+      content: "Check your DMs.",
       ephemeral: true
     })
   })
@@ -110,7 +112,7 @@ function initializeBot(config, token) {
 
       if (session.step === 4) {
         sessions.delete(message.author.id)
-        await message.author.send("✅ ctOS server registration completed.")
+        await message.author.send("ctOS registration completed.")
       }
     } catch {
       sessions.delete(message.author.id)
